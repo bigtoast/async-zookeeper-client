@@ -3,15 +3,17 @@ package com.github.bigtoast.zookeeper
 
 import org.scalatest.{BeforeAndAfterAll, BeforeAndAfter, WordSpec}
 import org.scalatest.matchers.ShouldMatchers
-import java.util.concurrent.Executors
+import java.util.concurrent.{TimeUnit, CountDownLatch, Executors}
 import akka.dispatch.{Await, ExecutionContext, Future}
 import akka.util.duration._
-import org.apache.zookeeper.CreateMode
+import org.apache.zookeeper.{WatchedEvent, Watcher, CreateMode}
 import akka.util.Duration
 import compat.Platform
 import com.github.bigtoast.zookeeper.AsyncResponse.FailedAsyncResponse
 import org.apache.zookeeper.KeeperException.{NoNodeException, NotEmptyException, BadVersionException}
 import AsyncZooKeeperClient._
+import org.apache.zookeeper.Watcher.Event.EventType
+import java.util.concurrent.atomic.AtomicInteger
 
 class AsyncZooKeeperClientSpecs extends WordSpec with ShouldMatchers with BeforeAndAfter with BeforeAndAfterAll {
 
@@ -191,6 +193,125 @@ class AsyncZooKeeperClientSpecs extends WordSpec with ShouldMatchers with Before
       resp.await.stat.getVersion should be (1)
     }
 
+  }
+
+  "watches when getting data" should {
+    "be triggered when data changes" in {
+      val waitForMe = new CountDownLatch(1)
+      val watch = new Watcher {
+        def process(event: WatchedEvent) = if ( event.getType == EventType.NodeDataChanged ) waitForMe.countDown
+      }
+      for {
+        init <- zk.createAndGet("chubbs", "chubbs".getBytes, CreateMode.EPHEMERAL, watch = Some(watch) )
+        seq  <- zk.set("chubbs", "blubber".getBytes )
+      } yield seq
+      waitForMe.await(1, TimeUnit.SECONDS)
+    }
+
+    "be triggered after multiple reads" in {
+      val waitForMe = new CountDownLatch(1)
+      val watch = new Watcher {
+        def process(event: WatchedEvent) = if ( event.getType == EventType.NodeDataChanged ) waitForMe.countDown
+      }
+      for {
+        init  <- zk.createAndGet("chubbs", "chubbs".getBytes, CreateMode.EPHEMERAL, watch = Some(watch) )
+        data1 <- zk.get("chubbs")
+        data2 <- zk.get("chubbs")
+        seq   <- zk.set("chubbs", "blubber".getBytes )
+      } yield seq
+
+      waitForMe.await(1, TimeUnit.SECONDS)
+    }
+
+    "be triggered for multiple watches after multiple reads" in {
+      val waitForMe = new CountDownLatch(1)
+      val waitForMeToo = new CountDownLatch(1)
+      val watch1 = new Watcher {
+        def process(event: WatchedEvent) = if ( event.getType == EventType.NodeDataChanged ) waitForMe.countDown
+      }
+      val watch2 = new Watcher {
+        def process(event: WatchedEvent) = if ( event.getType == EventType.NodeDataChanged ) waitForMeToo.countDown
+      }
+      for {
+        init  <- zk.createAndGet("chubbs", "chubbs".getBytes, CreateMode.EPHEMERAL )
+        data1 <- zk.get("chubbs", watch = Some(watch1))
+        data2 <- zk.get("chubbs", watch = Some(watch2))
+        seq   <- zk.set("chubbs", "blubber".getBytes )
+      } yield seq
+
+      waitForMe.await(1, TimeUnit.SECONDS)
+      waitForMeToo.await(1, TimeUnit.SECONDS)
+    }
+  }
+
+  "setting watches on exist" in {
+    val waitForMe    = new CountDownLatch(1)
+    val waitForMeToo = new CountDownLatch(1)
+    val watch1 = new Watcher {
+      def process(event: WatchedEvent) = if ( event.getType == EventType.NodeDataChanged ) waitForMe.countDown
+    }
+    val watch2 = new Watcher {
+      def process(event: WatchedEvent) = if ( event.getType == EventType.NodeDataChanged ) waitForMeToo.countDown
+    }
+    for {
+      init  <- zk.createAndGet("chubbs", "chubbs".getBytes, CreateMode.EPHEMERAL )
+      data1 <- zk.exists("chubbs", watch = Some(watch1))
+      data2 <- zk.get("chubbs", watch = Some(watch2))
+      seq   <- zk.set("chubbs", "blubber".getBytes )
+    } yield seq
+
+    waitForMe.await(1, TimeUnit.SECONDS)
+    waitForMeToo.await(1, TimeUnit.SECONDS)
+  }
+
+  "setting watches on getChildren" in {
+    val waitForMe = new CountDownLatch(1)
+    val watch1 = new Watcher {
+      def process(event: WatchedEvent) = if ( event.getType == EventType.NodeChildrenChanged ) waitForMe.countDown
+    }
+
+    for {
+      init  <- zk.createAndGet("chubbs", "chubbs".getBytes, CreateMode.PERSISTENT )
+      kids  <- zk.getChildren("chubbs", watch = Some(watch1) )
+      void  <- zk.createPath("chubbs/blubber" )
+    } yield void
+
+    waitForMe.await(1, TimeUnit.SECONDS)
+
+  }
+
+  "watchData" should {
+    "perminently watch any changes on node" in {
+      val waitForMe = new CountDownLatch(3)
+      val counter = new AtomicInteger(0)
+      for {
+        init  <- zk.create("splats", counter.get.toString.getBytes, CreateMode.PERSISTENT )
+        watch <- zk.watchData("splats"){ (path, data) => waitForMe.countDown }
+        one   <- zk.set("splats", counter.incrementAndGet.toString.getBytes )
+        two   <- zk.set("splats", counter.incrementAndGet.toString.getBytes )
+        three <- zk.set("splats", counter.incrementAndGet.toString.getBytes )
+      } yield three
+
+      waitForMe.await(1, TimeUnit.SECONDS) should be (true)
+      counter.get should be ( 3 )
+    }
+  }
+
+
+  "watchChildren" should {
+    "perminently watch child changes" in {
+      val waitForMe = new CountDownLatch(3)
+      for {
+        init  <- zk.create("splats", None, CreateMode.PERSISTENT )
+        watch <- zk.watchChildren("splats"){ kids => waitForMe.countDown }
+        one   <- zk.createPath("splats/one")
+        two   <- zk.createPath("splats/two")
+        three <- zk.createPath("splats/three")
+      } yield three
+
+      waitForMe.await(1, TimeUnit.SECONDS) should be (true)
+      waitForMe.getCount should be ( 0 )
+    }
   }
 
 }

@@ -13,6 +13,7 @@ import akka.dispatch.{Await, Future, ExecutionContext, Promise}
 import org.apache.zookeeper.KeeperException.Code
 import java.util
 import akka.util.duration._
+import java.awt.geom.Path2D
 
 
 sealed trait AsyncResponse {
@@ -84,9 +85,9 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
 
   private val log = LoggerFactory.getLogger(this.getClass)
 
-  @volatile private var zk : ZooKeeper = null
+  @volatile private var clientWatcher :Option[Watcher] = None
 
-  connect()
+  @volatile private var zk : ZooKeeper = null
 
   def this(servers: String, sessionTimeout: Int, connectTimeout: Int, basePath : String, eCtx :ExecutionContext) =
     this(servers, sessionTimeout, connectTimeout, basePath, None, eCtx)
@@ -102,22 +103,29 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
     this(servers, 3000, 3000, "/", watcher, eCtx)
 
   /** get the underlying ZK connection */
-  def getHandle = zk
+  def underlying :Option[ZooKeeper] = Option(zk)
 
   /**
    * connect() attaches to the remote zookeeper and sets an instance variable.
    */
-  private def connect() {
+  private[zookeeper] def connect :Unit = {
+    import KeeperState._
     val connectionLatch = new CountDownLatch(1)
-    val assignLatch = new CountDownLatch(1)
-    if (zk != null) {
-      zk.close()
-    }
-    zk = new ZooKeeper(servers, sessionTimeout,
-      new Watcher { def process(event : WatchedEvent) {
-        sessionEvent(assignLatch, connectionLatch, event)
-      }})
-    assignLatch.countDown()
+    val assignLatch     = new CountDownLatch(1)
+
+    if (zk != null) { zk.close }
+
+    zk = new ZooKeeper(servers, sessionTimeout, new Watcher {
+           def process(event: WatchedEvent) = {
+             assignLatch.await
+             event.getState match {
+               case SyncConnected => connectionLatch.countDown
+               case Expired       => connect
+               case _ =>
+             }
+             clientWatcher.foreach { _.process(event) }
+          } } )
+    assignLatch.countDown
     log.info("Attempting to connect to zookeeper servers {}", servers)
     connectionLatch.await(sessionTimeout, TimeUnit.MILLISECONDS)
     try {
@@ -131,27 +139,6 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
         throw new RuntimeException("Could not connect to zookeeper ensemble: " + servers
           + ". Connection timed out after " + connectTimeout + " milliseconds!", e)
       }
-    }
-  }
-
-  def sessionEvent(assignLatch: CountDownLatch, connectionLatch : CountDownLatch, event : WatchedEvent) {
-    log.info("Zookeeper event: {}", event)
-    assignLatch.await()
-    event.getState match {
-      case KeeperState.SyncConnected => {
-        try {
-          watcher.map(fn => fn(this))
-        } catch {
-          case e:Exception =>
-            log.error("Exception during zookeeper connection established callback", e)
-        }
-        connectionLatch.countDown()
-      }
-      case KeeperState.Expired => {
-        // Session was expired; create a new zookeeper connection
-        connect()
-      }
-      case _ => // Disconnected -- zookeeper library will handle reconnects
     }
   }
 
@@ -196,9 +183,9 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
     * @see <a target="_blank" href="http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#exists(java.lang.String, boolean, org.apache.zookeeper.AsyncCallback.StatCallback, java.lang.Object)">
     *        http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#exists(java.lang.String, boolean, org.apache.zookeeper.AsyncCallback.StatCallback, java.lang.Object)</a>
     */
-  def exists(path: String, ctx :Option[Any] = None ): Future[StatResponse] = {
+  def exists(path: String, ctx :Option[Any] = None, watch :Option[Watcher] = None ) :Future[StatResponse] = {
     val p = Promise[StatResponse]
-    zk.exists(mkPath(path), false, new StatCallback {
+    zk.exists(mkPath(path), watch.getOrElse(null), new StatCallback {
       def processResult(rc: Int, path: String, ignore: Any, stat: Stat) {
         handleResponse(rc, path, p, stat, ctx ){ StatResponse(path, stat, ctx ) }
       }
@@ -211,9 +198,9 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
     * @see <a target="_blank" href="http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#getChildren(java.lang.String, boolean, org.apache.zookeeper.AsyncCallback.Children2Callback, java.lang.Object)">
     *        http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#getChildren(java.lang.String, boolean, org.apache.zookeeper.AsyncCallback.Children2Callback, java.lang.Object)</a>
     */
-  def getChildren(path: String, ctx :Option[Any] = None ): Future[ChildrenResponse] = {
+  def getChildren(path: String, ctx :Option[Any] = None, watch :Option[Watcher] = None ): Future[ChildrenResponse] = {
     val p = Promise[ChildrenResponse]
-    zk.getChildren(mkPath(path), false, new Children2Callback {
+    zk.getChildren(mkPath(path), watch.getOrElse(null), new Children2Callback {
       def processResult(rc: Int, path: String, ignore: Any, children: util.List[String], stat: Stat) {
         handleResponse(rc, path, p, stat, ctx  ){ ChildrenResponse( children.toSeq, path, stat, ctx ) }
       }
@@ -270,8 +257,8 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
     /** Create a node and then return it. Under the hood this is a create followed by a get. If the stat or data is not
       * needed use a plain create which is cheaper.
       */
-    def createAndGet(path :String, data :Option[Array[Byte]], createMode :CreateMode, ctx :Option[Any] = None ) :Future[DataResponse] = {
-      create(path, data, createMode, ctx ) flatMap { _ => get(path, ctx) }
+    def createAndGet(path :String, data :Option[Array[Byte]], createMode :CreateMode, ctx :Option[Any] = None, watch :Option[Watcher] = None ) :Future[DataResponse] = {
+      create(path, data, createMode, ctx ) flatMap { _ => get(path, ctx, watch = watch ) }
     }
 
 
@@ -294,9 +281,9 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
       *        http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#getData(java.lang.String, boolean, org.apache.zookeeper.AsyncCallback.DataCallback, java.lang.Object)
       *      </a>
       */
-    def get(path: String, ctx :Option[Any] = None ) :Future[DataResponse] = {
+    def get(path: String, ctx :Option[Any] = None, watch :Option[Watcher] = None ) :Future[DataResponse] = {
       val p = Promise[DataResponse]
-      zk.getData(mkPath(path), false, new DataCallback {
+      zk.getData(mkPath(path), watch.getOrElse(null), new DataCallback {
         def processResult(rc: Int, path: String, ignore: Any, data: Array[Byte], stat: Stat) {
           handleResponse(rc, path, p, stat, ctx ){ DataResponse(Option(data), path, stat, ctx ) }
         }
@@ -361,132 +348,93 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
       recurse(path)
     }
 
-  /**
-   * Watches a node. When the node's data is changed, onDataChanged will be called with the
-   * new data value as a byte array. If the node is deleted, onDataChanged will be called with
-   * None and will track the node's re-creation with an existence watch.
-   */
-  /*
-  def watchNode(node : String, onDataChanged : (Option[Array[Byte]], Stat) => Unit) {
-    log.debug("Watching node {}", node)
-    val path = mkPath(node)
-    def updateData {
-      val stat = new Stat()
-      try {
-        onDataChanged(Some(zk.getData(path, dataGetter, stat)), stat)
-      } catch {
-        case e:KeeperException => {
-          log.warn("Failed to read node {}: {}", path, e)
-          deletedData
-        }
-      }
-    }
+  /** set a persistent watch on a node listening for data changes. If a NodeDataChanged event is received or a
+    * NodeCreated event is received the DataResponse will be returned with the new data and the watch will be
+    * reset. If a None or NodeChildrenChanged the watch will be reset returning nothing. If the node is deleted
+    * receiving a NodeDeleted event None will be returned.
+    *
+    * In the event of an error nothing will be returned but errors will be logged.
+    *
+    * @param path       relative or absolute
+    * @param persistent if this is false the watch will not be reset after receiving an event. ( normal zk behavior )
+    * @param onData     callback executed on data events. None on node deleted event. path will always be absolute regardless
+    *                   of what is passed into the function
+    * @return initial data. If this returns successfully the watch was set otherwise it wasn't
+    */
+  def watchData( path :String, persistent :Boolean = true )( onData :( String, Option[DataResponse] ) => Unit ) :Future[DataResponse] = {
+    val w = new Watcher {
 
-    def deletedData {
-      onDataChanged(None, new Stat())
-      if (zk.exists(path, dataGetter) != null) {
-        // Node was re-created by the time we called zk.exist
-        updateData
-      }
-    }
-    def dataGetter = new Watcher {
-      def process(event : WatchedEvent) {
-        if (event.getType == EventType.NodeDataChanged || event.getType == EventType.NodeCreated) {
-          updateData
-        } else if (event.getType == EventType.NodeDeleted) {
-          deletedData
-        }
-      }
-    }
-    updateData
-  }  */
+      def ifPersist :Option[Watcher] = { if ( persistent ) Some(this) else None }
 
-  /**
-   * Gets the children for a node (relative path from our basePath), watches
-   * for each NodeChildrenChanged event and runs the supplied updateChildren function and
-   * re-watches the node's children.
-   */
-  /*
-  def watchChildren(node : String, updateChildren : Seq[String] => Unit) {
-    val path = mkPath(node)
-    val childWatcher = new Watcher {
-      def process(event : WatchedEvent) {
-        if (event.getType == EventType.NodeChildrenChanged ||
-          event.getType == EventType.NodeCreated) {
-          watchChildren(node, updateChildren)
-        }
-      }
-    }
-    try {
-      val children = zk.getChildren(path, childWatcher)
-      updateChildren(children)
-    } catch {
-      case e:KeeperException => {
-        // Node was deleted -- fire a watch on node re-creation
-        log.warn("Failed to read node {}: {}", path, e)
-        updateChildren(List())
-        zk.exists(path, childWatcher)
-      }
-    }
-  } */
+      def process(event: WatchedEvent) = event.getType match {
+        case e if e == EventType.None || e == EventType.NodeChildrenChanged =>
+          exists(path, watch = ifPersist )
 
-  /**
-   * WARNING: watchMap must be thread-safe. Writing is synchronized on the watchMap. Readers MUST
-   * also synchronize on the watchMap for safety.
-   */
-  /*
-  def watchChildrenWithData[T](node : String, watchMap: mutable.Map[String, T], deserialize: Array[Byte] => T) {
-    watchChildrenWithData(node, watchMap, deserialize, None)
-  } */
-
-  /**
-   * Watch a set of nodes with an explicit notifier. The notifier will be called whenever
-   * the watchMap is modified
-   */
-  /*
-  def watchChildrenWithData[T](node : String, watchMap: mutable.Map[String, T],
-                               deserialize: Array[Byte] => T, notifier: String => Unit) {
-    watchChildrenWithData(node, watchMap, deserialize, Some(notifier))
-  }
-
-  private def watchChildrenWithData[T](node : String, watchMap: mutable.Map[String, T],
-                                       deserialize: Array[Byte] => T, notifier: Option[String => Unit]) {
-    def nodeChanged(child : String)(childData : Option[Array[Byte]], stat : Stat) {
-      childData match {
-        case Some(data) => {
-          watchMap.synchronized {
-            watchMap(child) = deserialize(data)
+        case e if e == EventType.NodeCreated || e == EventType.NodeDataChanged =>
+          get(path, watch = ifPersist ).onComplete {
+            case Left( error ) =>
+              log.error("Error on NodeCreated callback for path %s".format(mkPath(path)), error)
+            case Right( data ) =>
+              onData(mkPath(path), Some(data))
           }
-          notifier.map(f => f(child))
-        }
-        case None => // deletion handled via parent watch
+
+        case EventType.NodeDeleted =>
+          get(path, watch = ifPersist) onComplete {
+            case Left( error :FailedAsyncResponse ) if error.code == Code.NONODE =>
+              onData(mkPath(path), None)
+            case Right( data ) =>
+              onData(mkPath(path), Some(data) )
+            case Left( error ) =>
+              log.error("Error on NodeCreated callback for path %s".format(mkPath(path)), error)
+          }
       }
     }
 
-    def parentWatcher(children : Seq[String]) {
-      val childrenSet = Set(children : _*)
-      val watchedKeys = Set(watchMap.keySet.toSeq : _*)
-      val removedChildren = watchedKeys -- childrenSet
-      val addedChildren = childrenSet -- watchedKeys
-      watchMap.synchronized {
-        // remove deleted children from the watch map
-        for (child <- removedChildren) {
-          log.debug("Node {}: child {} removed", node, child)
-          watchMap -= child
-        }
-        // add new children to the watch map
-        for (child <- addedChildren) {
-          // node is added via nodeChanged callback
-          log.debug("Node {}: child {} added", node, child)
-          watchNode("%s/%s".format(node, child), nodeChanged(child))
-        }
-      }
-      for (child <- removedChildren) {
-        notifier.map(f => f(child))
-      }
-    }
-
-    watchChildren(node, parentWatcher)
+    get(path, watch = Some(w) )
   }
-  */
+
+  /** set a persistent watch on if the children of this node change. If they do the updated ChildResponse will be returned.
+    *
+   * @param path
+   * @param persistent
+   * @param onKids
+   * @return
+   */
+  def watchChildren( path :String, persistent :Boolean = true )( onKids :ChildrenResponse => Unit ) :Future[ChildrenResponse] = {
+    val p = mkPath(path)
+    val w = new Watcher {
+      def ifPersist :Option[Watcher] = { if ( persistent ) Some(this) else None }
+
+      def process(event: WatchedEvent) = event.getType match {
+        case EventType.NodeChildrenChanged =>
+          getChildren(p, watch = ifPersist ) onComplete {
+            case Left(error) =>
+              log.error("Error on NodeChildrenChanged callback for path %s".format(p), error)
+            case Right( kids ) =>
+              onKids(kids)
+          }
+          exists(p, watch = ifPersist )
+
+        case e =>
+          log.error("Not expecting to get event %s in a watchChildren" format e )
+
+      }
+    }
+    getChildren( p, watch = Some(w) )
+  }
+
+  /**
+   * sets the client watcher. reconnecting on session expired is handled by the client and doesn't need to be handled
+   * here.
+   */
+  def watchConnection( onState :KeeperState => Unit ) = {
+    val w = new Watcher {
+      def process(event: WatchedEvent) = onState(event.getState)
+    }
+    clientWatcher = Some(w)
+  }
+
+
+
+  connect
 }
