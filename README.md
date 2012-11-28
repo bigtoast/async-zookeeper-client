@@ -1,5 +1,5 @@
-async-zookeeper-client
-----------------------
+Scala Async ZooKeeper Client
+----------------------------
 
 Callbacks are a pain in the butt and they aren't composable. This wraps the ZK async api and converts the annoying callbacks
 into swimmingly sweet, eminently composable Futures. This also adds persistent watch goodness and some recursive operations.
