@@ -8,6 +8,7 @@ it has been pretty much rewritten at this point.
 
 <b>Coolness Provided</b>
  * Futures instead of callbacks
+ * Relative and Absolute paths
  * Persistent connection ( reconnect on expired session )
  * Persistent watches
  * Recursive create and delete
