@@ -1,5 +1,5 @@
 async-zookeeper-client
-======================
+----------------------
 
 Scala wrapper around the async ZK api. This is based on the twitter scala wrapper now maintained by 4square although it has been
 mostly rewritten.
@@ -10,8 +10,28 @@ It uses Akka 2.0 Futures. Once our company gets on scala 2.10 I will refactor to
 
 I didn't implement any ACL stuff because I never use that shiz.
 
+Api Docs [http://bigtoast.github.com/docs/async-zk-client/0.2.1/](http://bigtoast.github.com/docs/async-zk-client/0.2.1/)
+
+Currently depends on 
+ * ZK 3.4.3
+ * akka-actor 2.0.4
+ * Scala 2.9.2
+
 Getting Started
-===============
+---------------
+
+build.sbt
+```scala
+
+resolvers += "Bigtoast Repo" at "http://bigtoast.github.com/repo"
+
+libraryDependencies += "com.github.bigtoast" %% "async-zk-api" % "0.2.1"
+
+```
+
+Creating a persistent connection
+--------------------------------
+This automatically reconnect if the session expires
 
 ```scala
 
@@ -43,6 +63,8 @@ val zk = new AsyncZooKeeperClient(
 
 ```
 
+Basic Use
+---------
 Getting data, getting children, setting, creating and deleting works just like the normal async api
 except that paths can be absolute or relative and instead of passing in annoying callbacks
 we get rad composable futures.
@@ -54,7 +76,7 @@ we get rad composable futures.
 zk.create("newPath", None, CreateMode.EPHEMERAL_SEQUENTIAL )
 
 /* Set some data returning a Future[StatResponse] */
-zk.set("/death/to/false/metal/newPath",Some("chubbs".toBytes))
+zk.set("/death/to/false/metal/newPath",Some("chubbs".getBytes))
 
 /* Get data returning a Future[DataResponse] */
 zk.get("newPath")
@@ -65,7 +87,7 @@ zk.delete("newPath")
 /* compose all these */
 for {
   strResp  <- zk.create("newPath", None, EPHEMERAL_SEQUENTIAL )
-  statResp <- zk.set(strResp.path, Some("blubbs".toBytes) )
+  statResp <- zk.set(strResp.path, Some("blubbs".getBytes) )
   dataResp <- zk.get(statResp.path)
   voidResp <- zk.delete(dataResp.path, dataResp.stat.getVersion )
 } yield voidResp.path + " successfully deleted!!"
@@ -73,6 +95,8 @@ for {
 
 ```
 
+Additional Helpers
+------------------
 There are helper methods to recursively create nodes, recursively delete nodes, create nodes returning data
 and create a node if it doesn't exist or return it if it already does
 
@@ -96,6 +120,8 @@ zk.delete("path", force = true )
 
 ```
 
+Persistent Watches
+------------------
 There are also helpers for setting persistent watches.
 
 ```scala
@@ -117,7 +143,7 @@ zk.watchConnection {
   *
   * returns a Future[ChildResponse] with the initial children of the parent node
   */
-val initialKids = zk.watchChildren("parent"){ kids => // do stuff with child response }
+val initialKids = zk.watchChildren("parent"){ kids => /* do stuff with child response */ }
 
 /** sets a persistent watch, returning the initial data at for that node. When the
   * watch is triggered a ( String, Option[DataResponse] ) is passed into the closure
@@ -135,4 +161,49 @@ zk.watchData("/some/node/with/data", false){ case ( path, dataOp ) => /* trigger
 
 ```
 
+Dangerous Stuff
+---------------
 
+If you need the underlying zk client you can get it from the handle method. But don't hold on to it. If the ZK session expires, the
+underlying client will be replaced.
+
+```scala
+zk.handle // returns Option[ZooKeeper]
+```
+
+The AsyncZooKeeperClient object contains some optional implicits to help out.
+
+There is a Derserializer type class to assist in deserialization. Just provide an implicit function of Array[Byte] => T. 
+One is already included for Array[Byte] => String.
+
+```scala
+import AsyncZooKeeperClient._
+import java.io._
+
+// simple java deserializer 
+def fromBytes[T]( bytes :Array[Byte]) :T = {
+    var ary :Array[Byte] = null
+    var is :ObjectInputStream = null
+    try {
+      val ba = new ByteArrayInputStream( bytes )
+      is = new ObjectInputStream( ba )
+      is.readObject().asInstanceOf[T]
+    } catch {
+      case e :NullPointerException => throw new IOException("Byte array empty")
+    } finally {
+      if ( is != null )
+        is.close
+    }
+  }
+}
+
+// my data 
+case class Node( host :String, port :Int )
+
+implicit def nodeDeser = fromBytes[Node] _
+
+zk.get("cluster/member-1") map { ( path, dataOp ) => dataOp.map { _.deser[Node] } } // Returns a Future[Option[Node]]
+
+```
+
+Provided also is an implicit conversion from Array[Byte] to Option[Array[Byte]], althought Im still unsure if this is a good idea.
