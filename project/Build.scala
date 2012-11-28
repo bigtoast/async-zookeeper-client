@@ -31,6 +31,7 @@ object AsyncZkClient extends Build {
 
       publishDocs <<= ( doc in Compile , target in Compile in doc, version ) map { ( docs, dir, v ) =>
         val newDir = Path.userHome / "/Projects/BigToast/bigtoast.github.com/docs/async-zk-client" / v
+        IO.delete( newDir )
         IO.createDirectory( newDir )
         IO.copyDirectory( dir, newDir )
       },
