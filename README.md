@@ -12,6 +12,7 @@ I didn't implement any ACL stuff because I never use that shiz.
 
 Getting Started
 ===============
+
 ```scala
 
 import com.github.bigtoast.zookeeper._
@@ -39,11 +40,13 @@ val zk = new AsyncZooKeeperClient(
     /** Or use the default ctx from your ActorSystem if you are using Akka already. */
     eCtx = ExecutionContext.fromExecutorService( Executors.newCachedThreadPool ) )
 
+
 ```
 
 Getting data, getting children, setting, creating and deleting works just like the normal async api
 except that paths can be absolute or relative and instead of passing in annoying callbacks
 we get rad composable futures.
+
 
 ```scala
 
@@ -67,6 +70,7 @@ for {
   voidResp <- zk.delete(dataResp.path, dataResp.stat.getVersion )
 } yield voidResp.path + " successfully deleted!!"
 
+
 ```
 
 There are helper methods to recursively create nodes, recursively delete nodes, create nodes returning data
@@ -88,6 +92,7 @@ zk.deleteChildren("path")
 
 /* same as above but "path" will be deleted as well */
 zk.delete("path", force = true )
+
 
 ```
 
