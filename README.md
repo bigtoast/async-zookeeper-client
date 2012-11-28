@@ -1,10 +1,16 @@
 async-zookeeper-client
 ----------------------
 
-Scala wrapper around the async ZK api. This is based on the twitter scala wrapper now maintained by 4square although it has been
-mostly rewritten.
+Callbacks are a pain in the butt and they aren't composable. This wraps the ZK async api and converts the annoying callbacks
+into swimmingly sweet, eminently composable Futures. This also adds persistent watch goodness and some recursive operations.
+Originally based on the twitter scala wrapper now maintained by 4square (https://github.com/foursquare/scala-zookeeper-client),
+it has been pretty much rewritten at this point.
 
-https://github.com/foursquare/scala-zookeeper-client
+<b>Coolness Provided</b>
+ * Futures instead of callbacks
+ * Persistent connection ( reconnect on expired session )
+ * Persistent watches
+ * Recursive create and delete
 
 It uses Akka 2.0 Futures. Once our company gets on scala 2.10 I will refactor to use SIP 14 Futures.
 
