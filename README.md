@@ -32,7 +32,7 @@ build.sbt
 
 resolvers += "Bigtoast Repo" at "http://bigtoast.github.com/repo"
 
-libraryDependencies += "com.github.bigtoast" %% "async-zk-api" % "0.2.1"
+libraryDependencies += "com.github.bigtoast" %% "async-zk-api" % "0.2.2"
 
 ```
 
