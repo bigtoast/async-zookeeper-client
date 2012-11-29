@@ -13,7 +13,6 @@ import akka.dispatch.{Await, Future, ExecutionContext, Promise}
 import org.apache.zookeeper.KeeperException.Code
 import java.util
 import akka.util.duration._
-import java.awt.geom.Path2D
 
 
 sealed trait AsyncResponse {

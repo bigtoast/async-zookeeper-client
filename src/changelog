@@ -1,4 +1,9 @@
 
+0.2.2
+[11-29-2012]
+ * removed retarded import
+ * updated docs
+
 0.2.1
 [11-20-2012]
  * changed build.sbt to Build.scala
