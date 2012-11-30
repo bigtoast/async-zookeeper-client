@@ -5,6 +5,8 @@ import Process._
 
 object AsyncZkClient extends Build {
 
+  val VERSION = "0.2.3"
+
   val dependencies =
     "com.typesafe.akka"    %  "akka-actor" % "2.0.4" ::
     "org.apache.zookeeper" %  "zookeeper"  % "3.4.3" ::
@@ -16,7 +18,7 @@ object AsyncZkClient extends Build {
     settings = Defaults.defaultSettings ++ Seq(
       organization := "com.github.bigtoast",
       name         := "async-zk-client",
-      version      := "0.2.2",
+      version      := VERSION,
       scalaVersion := "2.9.2",
 
       ivyXML :=

@@ -1,4 +1,8 @@
 
+0.2.3
+[11-30-1012]
+ * made watch persistent flag a by name parameter. ( request from @spidaman )
+
 0.2.2
 [11-29-2012]
  * removed retarded import

@@ -347,6 +347,11 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
       recurse(path)
     }
 
+  /** Set a persistent watch on data.
+    * @see watchData
+    */
+  def watchData(path :String)( onData :( String, Option[DataResponse] ) => Unit ) :Future[DataResponse] = watchData(path,true)(onData)
+
   /** set a persistent watch on a node listening for data changes. If a NodeDataChanged event is received or a
     * NodeCreated event is received the DataResponse will be returned with the new data and the watch will be
     * reset. If a None or NodeChildrenChanged the watch will be reset returning nothing. If the node is deleted
@@ -360,7 +365,7 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
     *                   of what is passed into the function
     * @return initial data. If this returns successfully the watch was set otherwise it wasn't
     */
-  def watchData( path :String, persistent :Boolean = true )( onData :( String, Option[DataResponse] ) => Unit ) :Future[DataResponse] = {
+  def watchData( path :String, persistent : => Boolean )( onData :( String, Option[DataResponse] ) => Unit ) :Future[DataResponse] = {
     val w = new Watcher {
 
       def ifPersist :Option[Watcher] = { if ( persistent ) Some(this) else None }
@@ -392,6 +397,11 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
     get(path, watch = Some(w) )
   }
 
+  /** Sets a persistent child watch.
+    * @see watchChildren
+   */
+  def watchChildren( path :String )( onKids :ChildrenResponse => Unit ) :Future[ChildrenResponse] = watchChildren(path, true)( onKids )
+
   /** set a persistent watch on if the children of this node change. If they do the updated ChildResponse will be returned.
     *
    * @param path
@@ -399,7 +409,7 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
    * @param onKids
    * @return
    */
-  def watchChildren( path :String, persistent :Boolean = true )( onKids :ChildrenResponse => Unit ) :Future[ChildrenResponse] = {
+  def watchChildren( path :String, persistent : => Boolean )( onKids :ChildrenResponse => Unit ) :Future[ChildrenResponse] = {
     val p = mkPath(path)
     val w = new Watcher {
       def ifPersist :Option[Watcher] = { if ( persistent ) Some(this) else None }
