@@ -10,7 +10,8 @@ object AsyncZkClient extends Build {
   val dependencies =
     "com.typesafe.akka"    %  "akka-actor" % "2.0.4" ::
     "org.apache.zookeeper" %  "zookeeper"  % "3.4.3" ::
-    "org.scalatest"        %% "scalatest"  % "1.8" % "test" :: Nil
+    "org.scalatest"        %% "scalatest"  % "1.8" % "test" :: 
+    "com.github.bigtoast"  %% "rokprox"    % "0.2.0" % "test" :: Nil
 
   val publishDocs = TaskKey[Unit]("publish-docs")
 
