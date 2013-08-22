@@ -9,10 +9,11 @@ import org.apache.zookeeper.data.Stat
 import org.apache.zookeeper.ZooDefs.Ids
 import scala.collection.JavaConversions._
 import org.apache.zookeeper.AsyncCallback._
-import akka.dispatch.{Await, Future, ExecutionContext, Promise}
+import scala.concurrent.{Await, Future, ExecutionContext, Promise}
 import org.apache.zookeeper.KeeperException.Code
 import java.util
-import akka.util.duration._
+import scala.concurrent.duration._
+import scala.util.{Success, Failure}
 
 
 sealed trait AsyncResponse {
@@ -113,7 +114,6 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
     val assignLatch     = new CountDownLatch(1)
 
     if (zk != null) { zk.close }
-
     zk = new ZooKeeper(servers, sessionTimeout, new Watcher {
            def process(event: WatchedEvent) = {
              assignLatch.await
@@ -131,7 +131,7 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
       isAliveSync
       Await.result( createPath(""), 10 seconds )
     } catch {
-      case e => {
+      case e :Exception => {
         log.error("Could not connect to zookeeper ensemble: " + servers
           + ". Connection timed out after " + connectTimeout + " milliseconds!", e)
 
@@ -170,11 +170,11 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
 
   /** helper method to convert a zk response in to a client reponse and handle the errors */
   def handleResponse[T]( rc :Int, path :String, p :Promise[T], stat:Stat, cxt :Option[Any] )( f : => T ) :Future[T] = {
-    Code.get(rc) match {
+    (Code.get(rc) match {
       case Code.OK => p.success( f )
       case error if path == null => p.failure( FailedAsyncResponse( KeeperException.create(error),Option(path), Option(stat), cxt ) )
       case error => p.failure( FailedAsyncResponse( KeeperException.create(error, path ),Option(path), Option(stat), cxt ) )
-    }
+    }).future
   }
 
   /** Wrapper around the ZK exists method. Watch is hardcoded to false.
@@ -189,7 +189,7 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
         handleResponse(rc, path, p, stat, ctx ){ StatResponse(path, stat, ctx ) }
       }
     }, ctx )
-    p
+    p.future
   }
 
   /** Wrapper around the ZK getChildren method. Watch is hardcoded to false.
@@ -204,7 +204,7 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
         handleResponse(rc, path, p, stat, ctx  ){ ChildrenResponse( children.toSeq, path, stat, ctx ) }
       }
     }, ctx)
-    p
+    p.future
   }
 
   /** close the underlying zk connection */
@@ -218,7 +218,7 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
     zk.exists("/", false)
     true
   } catch {
-    case e =>
+    case e :Exception =>
       log.warn("ZK not connected in isAliveSync", e)
       false
   }
@@ -250,7 +250,7 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
           handleResponse(rc, path, p, null, ctx ){ StringResponse( name, path, ctx ) }
         }
       }, ctx )
-      p
+      p.future
     }
 
     /** Create a node and then return it. Under the hood this is a create followed by a get. If the stat or data is not
@@ -287,7 +287,7 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
           handleResponse(rc, path, p, stat, ctx ){ DataResponse(Option(data), path, stat, ctx ) }
         }
       }, ctx )
-      p
+      p.future
     }
 
     /** Wrapper around the zk setData method.
@@ -302,7 +302,7 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
           handleResponse(rc, path, p, stat, ctx ){ StatResponse(path, stat, ctx ) }
         }
       }, ctx )
-      p
+      p.future
     }
 
     /** Wrapper around zk delete method.
@@ -325,7 +325,7 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
             handleResponse(rc, path, p, null, ctx ){ VoidResponse(path, ctx) }
           }
         }, ctx )
-        p
+        p.future
       }
     }
 
@@ -340,7 +340,7 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
           }
         } flatMap { seq =>
           if ( p == path )
-            Promise.successful( VoidResponse( path, ctx ) )
+            Promise.successful( VoidResponse( path, ctx ) ).future
           else
             delete( p, -1, ctx ) }
       }
@@ -376,19 +376,19 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
 
         case e if e == EventType.NodeCreated || e == EventType.NodeDataChanged =>
           get(path, watch = ifPersist ).onComplete {
-            case Left( error ) =>
+            case Failure( error ) =>
               log.error("Error on NodeCreated callback for path %s".format(mkPath(path)), error)
-            case Right( data ) =>
+            case Success( data :AsyncResponse.DataResponse ) =>
               onData(mkPath(path), Some(data))
           }
 
         case EventType.NodeDeleted =>
           get(path, watch = ifPersist) onComplete {
-            case Left( error :FailedAsyncResponse ) if error.code == Code.NONODE =>
+            case Failure( error :FailedAsyncResponse ) if error.code == Code.NONODE =>
               onData(mkPath(path), None)
-            case Right( data ) =>
+            case Success( data :AsyncResponse.DataResponse ) =>
               onData(mkPath(path), Some(data) )
-            case Left( error ) =>
+            case Failure( error ) =>
               log.error("Error on NodeCreated callback for path %s".format(mkPath(path)), error)
           }
       }
@@ -417,9 +417,9 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
       def process(event: WatchedEvent) = event.getType match {
         case EventType.NodeChildrenChanged =>
           getChildren(p, watch = ifPersist ) onComplete {
-            case Left(error) =>
+            case Failure(error) =>
               log.error("Error on NodeChildrenChanged callback for path %s".format(p), error)
-            case Right( kids ) =>
+            case Success( kids :AsyncResponse.ChildrenResponse ) =>
               onKids(kids)
           }
           exists(p, watch = ifPersist )
