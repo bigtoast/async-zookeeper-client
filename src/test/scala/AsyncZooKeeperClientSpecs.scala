@@ -4,10 +4,10 @@ package com.github.bigtoast.zookeeper
 import org.scalatest.{BeforeAndAfterAll, BeforeAndAfter, WordSpec}
 import org.scalatest.matchers.ShouldMatchers
 import java.util.concurrent.{TimeUnit, CountDownLatch, Executors}
-import akka.dispatch.{Await, ExecutionContext, Future}
-import akka.util.duration._
+import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.concurrent.duration._
 import org.apache.zookeeper.{WatchedEvent, Watcher, CreateMode}
-import akka.util.Duration
+import scala.concurrent.duration.Duration
 import compat.Platform
 import com.github.bigtoast.zookeeper.AsyncResponse.FailedAsyncResponse
 import org.apache.zookeeper.KeeperException.{NoNodeException, NotEmptyException, BadVersionException}
@@ -17,8 +17,11 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class AsyncZooKeeperClientSpecs extends WordSpec with ShouldMatchers with BeforeAndAfter with BeforeAndAfterAll {
 
+  import scala.concurrent.ExecutionContext.Implicits.global
+
   val eService = Executors.newCachedThreadPool
   implicit val to = 3 second
+  var zkServer :EmbeddedZookeeper = new EmbeddedZookeeper("127.0.0.1:2181")
   var zk :AsyncZooKeeperClient = _
 
   class DoAwait[T]( f :Future[T] ) {
@@ -28,7 +31,7 @@ class AsyncZooKeeperClientSpecs extends WordSpec with ShouldMatchers with Before
   implicit def toDoAwait[T]( f :Future[T] ) = new DoAwait[T]( f )
 
   before {
-    zk = new AsyncZooKeeperClient("localhost:2181",1000,1000,"/async-client/tests", None, ExecutionContext.fromExecutorService( eService ) )
+    zk = new AsyncZooKeeperClient("127.0.0.1:2181",1000,1000,"/async-client/tests", None, ExecutionContext.fromExecutorService( eService ) )
   }
 
   after {
@@ -40,7 +43,9 @@ class AsyncZooKeeperClientSpecs extends WordSpec with ShouldMatchers with Before
   }
 
   override def afterAll {
-    eService.shutdown
+    eService.shutdown()
+
+    zkServer.shutdown()
   }
 
   "A relative path should have base path prepended" in {
