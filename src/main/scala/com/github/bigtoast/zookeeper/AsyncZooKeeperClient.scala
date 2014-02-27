@@ -57,6 +57,15 @@ object AsyncZooKeeperClient {
   }
 
   implicit def toDeser(bytes: Array[Byte]): Deserializer = new Deserializer(bytes)
+
+  def apply(
+             servers:         String,
+             sessionTimeout:  Int,
+             connectTimeout:  Int,
+             basePath:        String,
+             watcher:         Option[AsyncZooKeeperClient => Unit],
+             eCtx:            ExecutionContext
+             ): AsyncZooKeeperClient = new AsyncZooKeeperClientImpl(servers, sessionTimeout, connectTimeout, basePath, watcher, eCtx)
 }
 
 /**
@@ -76,8 +85,163 @@ object AsyncZooKeeperClient {
  *
  *
  */
-class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val connectTimeout: Int,
-                           val basePath: String, watcher: Option[AsyncZooKeeperClient => Unit], eCtx: ExecutionContext) {
+trait AsyncZooKeeperClient {
+
+  import AsyncResponse._
+
+
+  /** get the underlying ZK connection */
+  def underlying: Option[ZooKeeper]
+
+  /**
+   * Given a string representing a path, return each subpath
+   * Ex. subPaths("/a/b/c", "/") == ["/a", "/a/b", "/a/b/c"]
+   */
+  def subPaths(path: String, sep: Char) :List[String]
+
+  /**
+   * helper method to convert a zk response in to a client reponse and handle the errors
+   * */
+  def handleResponse[T](rc: Int, path: String, p: Promise[T], stat: Stat, cxt: Option[Any])(f: => T): Future[T]
+
+  /** Wrapper around the ZK exists method. Watch is hardcoded to false.
+    *
+    * @see <a target="_blank" href="http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#exists(java.lang.String, boolean, org.apache.zookeeper.AsyncCallback.StatCallback, java.lang.Object)">
+    *      http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#exists(java.lang.String, boolean, org.apache.zookeeper.AsyncCallback.StatCallback, java.lang.Object)</a>
+    */
+  def exists(path: String, ctx: Option[Any] = None, watch: Option[Watcher] = None): Future[StatResponse]
+
+
+  /** Wrapper around the ZK getChildren method. Watch is hardcoded to false.
+    *
+    * @see <a target="_blank" href="http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#getChildren(java.lang.String, boolean, org.apache.zookeeper.AsyncCallback.Children2Callback, java.lang.Object)">
+    *      http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#getChildren(java.lang.String, boolean, org.apache.zookeeper.AsyncCallback.Children2Callback, java.lang.Object)</a>
+    */
+  def getChildren(path: String, ctx: Option[Any] = None, watch: Option[Watcher] = None): Future[ChildrenResponse]
+
+
+  /** close the underlying zk connection */
+  def close() :Unit
+
+  /** Checks the connection by checking existence of "/" */
+  def isAlive: Future[Boolean]
+
+  /** Check the connection synchronously */
+  def isAliveSync: Boolean
+
+
+  /** Recursively create a path with persistent nodes and no watches set. */
+  def createPath(path: String): Future[VoidResponse]
+
+
+  /** Create a path with OPEN_ACL_UNSAFE hardcoded
+    * @see <a target="_blank" href="http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#create(java.lang.String, byte[], java.util.List, org.apache.zookeeper.CreateMode, org.apache.zookeeper.AsyncCallback.StringCallback, java.lang.Object)">
+    *      http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#create(java.lang.String, byte[], java.util.List, org.apache.zookeeper.CreateMode, org.apache.zookeeper.AsyncCallback.StringCallback, java.lang.Object)
+    *      </a>
+    */
+  def create(path: String, data: Option[Array[Byte]], createMode: CreateMode, ctx: Option[Any] = None): Future[StringResponse]
+
+
+  /** Create a node and then return it. Under the hood this is a create followed by a get. If the stat or data is not
+    * needed use a plain create which is cheaper.
+    */
+  def createAndGet(path: String, data: Option[Array[Byte]], createMode: CreateMode, ctx: Option[Any] = None, watch: Option[Watcher] = None): Future[DataResponse]
+
+
+  /** Return the node if it exists, otherwise create a new node with the data passed in. If the node is created a get will
+    * be called and the value returned. In case of a race condition where a two or more requests are executed at the same
+    * time and one of the creates will fail with a NodeExistsException, it will be handled and a get will be called.
+    */
+  def getOrCreate(path: String, data: Option[Array[Byte]], createMode: CreateMode, ctx: Option[Any] = None): Future[DataResponse]
+
+
+  /** Wrapper around zk getData method. Watch is hardcoded to false.
+    * @see <a target="_blank" href="http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#getData(java.lang.String, boolean, org.apache.zookeeper.AsyncCallback.DataCallback, java.lang.Object)">
+    *      http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#getData(java.lang.String, boolean, org.apache.zookeeper.AsyncCallback.DataCallback, java.lang.Object)
+    *      </a>
+    */
+  def get(path: String, ctx: Option[Any] = None, watch: Option[Watcher] = None): Future[DataResponse]
+
+
+  /** Wrapper around the zk setData method.
+    * @see <a target="_blank" href="http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#setData(java.lang.String, byte[], int, org.apache.zookeeper.AsyncCallback.StatCallback, java.lang.Object)">
+    *      http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#setData(java.lang.String, byte[], int, org.apache.zookeeper.AsyncCallback.StatCallback, java.lang.Object)
+    *      </a>
+    */
+  def set(path: String, data: Option[Array[Byte]], version: Int = -1, ctx: Option[Any] = None): Future[StatResponse]
+
+
+  /** Wrapper around zk delete method.
+    * @see <a target="_blank" href="http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#delete(java.lang.String, int, org.apache.zookeeper.AsyncCallback.VoidCallback, java.lang.Object)">
+    *      http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#delete(java.lang.String, int, org.apache.zookeeper.AsyncCallback.VoidCallback, java.lang.Object)
+    *      </a>
+    *
+    *      The version only applies to the node indicated by the path. If force is true all children will be deleted even if the
+    *      version doesn't match.
+    *
+    * @param force Delete all children of this node
+    */
+  def delete(path: String, version: Int = -1, ctx: Option[Any] = None, force: Boolean = false): Future[VoidResponse]
+
+
+  /** Delete all the children of a node but not the node. */
+  def deleteChildren(path: String, ctx: Option[Any] = None): Future[VoidResponse]
+
+
+  /** Set a persistent watch on data.
+    * @see watchData
+    */
+  def watchData(path: String)(onData: (String, Option[DataResponse]) => Unit): Future[DataResponse]
+
+
+  /** set a persistent watch on a node listening for data changes. If a NodeDataChanged event is received or a
+    * NodeCreated event is received the DataResponse will be returned with the new data and the watch will be
+    * reset. If a None or NodeChildrenChanged the watch will be reset returning nothing. If the node is deleted
+    * receiving a NodeDeleted event None will be returned.
+    *
+    * In the event of an error nothing will be returned but errors will be logged.
+    *
+    * @param path       relative or absolute
+    * @param persistent if this is false the watch will not be reset after receiving an event. ( normal zk behavior )
+    * @param onData     callback executed on data events. None on node deleted event. path will always be absolute regardless
+    *                   of what is passed into the function
+    * @return initial data. If this returns successfully the watch was set otherwise it wasn't
+    */
+  def watchData(path: String, persistent: => Boolean)(onData: (String, Option[DataResponse]) => Unit): Future[DataResponse]
+
+
+  /** Sets a persistent child watch.
+    * @see watchChildren
+    */
+  def watchChildren(path: String)(onKids: ChildrenResponse => Unit): Future[ChildrenResponse]
+
+
+  /** set a persistent watch on if the children of this node change. If they do the updated ChildResponse will be returned.
+    *
+    * @param path
+    * @param persistent
+    * @param onKids
+    * @return
+    */
+  def watchChildren(path: String, persistent: => Boolean)(onKids: ChildrenResponse => Unit): Future[ChildrenResponse]
+
+
+
+  /**
+   * sets the client watcher. reconnecting on session expired is handled by the client and doesn't need to be handled
+   * here.
+   */
+  def watchConnection(onState: KeeperState => Unit) :Unit
+}
+
+class AsyncZooKeeperClientImpl(
+          val servers: String,
+          val sessionTimeout: Int,
+          val connectTimeout: Int,
+          val basePath: String,
+          watcher: Option[AsyncZooKeeperClient => Unit],
+          eCtx: ExecutionContext
+  ) extends AsyncZooKeeperClient {
 
   import AsyncResponse._
 
@@ -102,8 +266,9 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
   def this(servers: String, watcher: AsyncZooKeeperClient => Unit, eCtx: ExecutionContext) =
     this(servers, 3000, 3000, "/", watcher, eCtx)
 
-  /** get the underlying ZK connection */
-  def underlying: Option[ZooKeeper] = Option(zk)
+
+  override def underlying: Option[ZooKeeper] = Option(zk)
+
 
   /**
    * connect() attaches to the remote zookeeper and sets an instance variable.
@@ -147,12 +312,11 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
     }
   }
 
+
   private[zookeeper] def handleNull(op: Option[Array[Byte]]): Array[Byte] = if (op == null) null else op.getOrElse(null)
 
-  /** Given a string representing a path, return each subpath
-    * Ex. subPaths("/a/b/c", "/") == ["/a", "/a/b", "/a/b/c"]
-    */
-  def subPaths(path: String, sep: Char) =
+
+  override def subPaths(path: String, sep: Char) =
     path.split(sep).toList match {
       case Nil => Nil
       case l :: tail =>
@@ -160,6 +324,7 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
           (xs, x) => (xs.headOption.getOrElse("") + sep.toString + x) :: xs
         } reverse
     }
+
 
   /** Create a zk path from a relative path. If an absolute path is passed in the base path will not be prepended.
     * Trailing '/'s will be stripped except for the path '/' and all '//' will be translated to '/'.
@@ -175,8 +340,8 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
     case str => str
   }
 
-  /** helper method to convert a zk response in to a client reponse and handle the errors */
-  def handleResponse[T](rc: Int, path: String, p: Promise[T], stat: Stat, cxt: Option[Any])(f: => T): Future[T] = {
+
+  override def handleResponse[T](rc: Int, path: String, p: Promise[T], stat: Stat, cxt: Option[Any])(f: => T): Future[T] = {
     Code.get(rc) match {
       case Code.OK => p.success(f)
       case error if path == null => p.failure(FailedAsyncResponse(KeeperException.create(error), Option(path), Option(stat), cxt))
@@ -184,12 +349,8 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
     }
   }
 
-  /** Wrapper around the ZK exists method. Watch is hardcoded to false.
-    *
-    * @see <a target="_blank" href="http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#exists(java.lang.String, boolean, org.apache.zookeeper.AsyncCallback.StatCallback, java.lang.Object)">
-    *      http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#exists(java.lang.String, boolean, org.apache.zookeeper.AsyncCallback.StatCallback, java.lang.Object)</a>
-    */
-  def exists(path: String, ctx: Option[Any] = None, watch: Option[Watcher] = None): Future[StatResponse] = {
+
+  override def exists(path: String, ctx: Option[Any] = None, watch: Option[Watcher] = None): Future[StatResponse] = {
     val p = Promise[StatResponse]
     zk.exists(mkPath(path), watch.getOrElse(null), new StatCallback {
       def processResult(rc: Int, path: String, ignore: Any, stat: Stat) {
@@ -199,12 +360,8 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
     p
   }
 
-  /** Wrapper around the ZK getChildren method. Watch is hardcoded to false.
-    *
-    * @see <a target="_blank" href="http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#getChildren(java.lang.String, boolean, org.apache.zookeeper.AsyncCallback.Children2Callback, java.lang.Object)">
-    *      http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#getChildren(java.lang.String, boolean, org.apache.zookeeper.AsyncCallback.Children2Callback, java.lang.Object)</a>
-    */
-  def getChildren(path: String, ctx: Option[Any] = None, watch: Option[Watcher] = None): Future[ChildrenResponse] = {
+
+  override def getChildren(path: String, ctx: Option[Any] = None, watch: Option[Watcher] = None): Future[ChildrenResponse] = {
     val p = Promise[ChildrenResponse]
     zk.getChildren(mkPath(path), watch.getOrElse(null), new Children2Callback {
       def processResult(rc: Int, path: String, ignore: Any, children: util.List[String], stat: Stat) {
@@ -214,16 +371,16 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
     p
   }
 
-  /** close the underlying zk connection */
-  def close = zk.close
 
-  /** Checks the connection by checking existence of "/" */
-  def isAlive: Future[Boolean] = exists("/") map {
+  override def close = zk.close
+
+
+  override def isAlive: Future[Boolean] = exists("/") map {
     _.stat.getVersion >= 0
   }
 
-  /** Check the connection synchronously */
-  def isAliveSync: Boolean = try {
+
+  override def isAliveSync: Boolean = try {
     zk.exists("/", false)
     true
   } catch {
@@ -232,8 +389,8 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
       false
   }
 
-  /** Recursively create a path with persistent nodes and no watches set. */
-  def createPath(path: String): Future[VoidResponse] = {
+
+  override def createPath(path: String): Future[VoidResponse] = {
     Future.sequence {
       for {
         subPath <- subPaths(mkPath(path), '/')
@@ -248,12 +405,8 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
     }
   }
 
-  /** Create a path with OPEN_ACL_UNSAFE hardcoded
-    * @see <a target="_blank" href="http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#create(java.lang.String, byte[], java.util.List, org.apache.zookeeper.CreateMode, org.apache.zookeeper.AsyncCallback.StringCallback, java.lang.Object)">
-    *      http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#create(java.lang.String, byte[], java.util.List, org.apache.zookeeper.CreateMode, org.apache.zookeeper.AsyncCallback.StringCallback, java.lang.Object)
-    *      </a>
-    */
-  def create(path: String, data: Option[Array[Byte]], createMode: CreateMode, ctx: Option[Any] = None): Future[StringResponse] = {
+
+  override def create(path: String, data: Option[Array[Byte]], createMode: CreateMode, ctx: Option[Any] = None): Future[StringResponse] = {
     val p = Promise[StringResponse]
     zk.create(mkPath(path), handleNull(data), Ids.OPEN_ACL_UNSAFE, createMode, new StringCallback {
       def processResult(rc: Int, path: String, ignore: Any, name: String) {
@@ -263,19 +416,13 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
     p
   }
 
-  /** Create a node and then return it. Under the hood this is a create followed by a get. If the stat or data is not
-    * needed use a plain create which is cheaper.
-    */
-  def createAndGet(path: String, data: Option[Array[Byte]], createMode: CreateMode, ctx: Option[Any] = None, watch: Option[Watcher] = None): Future[DataResponse] = {
+
+  override def createAndGet(path: String, data: Option[Array[Byte]], createMode: CreateMode, ctx: Option[Any] = None, watch: Option[Watcher] = None): Future[DataResponse] = {
     create(path, data, createMode, ctx) flatMap { _ => get(path, ctx, watch = watch)}
   }
 
 
-  /** Return the node if it exists, otherwise create a new node with the data passed in. If the node is created a get will
-    * be called and the value returned. In case of a race condition where a two or more requests are executed at the same
-    * time and one of the creates will fail with a NodeExistsException, it will be handled and a get will be called.
-    */
-  def getOrCreate(path: String, data: Option[Array[Byte]], createMode: CreateMode, ctx: Option[Any] = None): Future[DataResponse] = {
+  override def getOrCreate(path: String, data: Option[Array[Byte]], createMode: CreateMode, ctx: Option[Any] = None): Future[DataResponse] = {
     get(path) recoverWith {
       case FailedAsyncResponse(e: KeeperException.NoNodeException, _, _, _) =>
         create(path, data, createMode, ctx) flatMap {
@@ -287,12 +434,8 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
     }
   }
 
-  /** Wrapper around zk getData method. Watch is hardcoded to false.
-    * @see <a target="_blank" href="http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#getData(java.lang.String, boolean, org.apache.zookeeper.AsyncCallback.DataCallback, java.lang.Object)">
-    *      http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#getData(java.lang.String, boolean, org.apache.zookeeper.AsyncCallback.DataCallback, java.lang.Object)
-    *      </a>
-    */
-  def get(path: String, ctx: Option[Any] = None, watch: Option[Watcher] = None): Future[DataResponse] = {
+
+  override def get(path: String, ctx: Option[Any] = None, watch: Option[Watcher] = None): Future[DataResponse] = {
     val p = Promise[DataResponse]
     zk.getData(mkPath(path), watch.getOrElse(null), new DataCallback {
       def processResult(rc: Int, path: String, ignore: Any, data: Array[Byte], stat: Stat) {
@@ -302,12 +445,8 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
     p
   }
 
-  /** Wrapper around the zk setData method.
-    * @see <a target="_blank" href="http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#setData(java.lang.String, byte[], int, org.apache.zookeeper.AsyncCallback.StatCallback, java.lang.Object)">
-    *      http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#setData(java.lang.String, byte[], int, org.apache.zookeeper.AsyncCallback.StatCallback, java.lang.Object)
-    *      </a>
-    */
-  def set(path: String, data: Option[Array[Byte]], version: Int = -1, ctx: Option[Any] = None): Future[StatResponse] = {
+
+  override def set(path: String, data: Option[Array[Byte]], version: Int = -1, ctx: Option[Any] = None): Future[StatResponse] = {
     val p = Promise[StatResponse]
     zk.setData(mkPath(path), handleNull(data), version, new StatCallback {
       def processResult(rc: Int, path: String, ignore: Any, stat: Stat) {
@@ -317,17 +456,8 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
     p
   }
 
-  /** Wrapper around zk delete method.
-    * @see <a target="_blank" href="http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#delete(java.lang.String, int, org.apache.zookeeper.AsyncCallback.VoidCallback, java.lang.Object)">
-    *      http://zookeeper.apache.org/doc/r3.4.1/api/org/apache/zookeeper/ZooKeeper.html#delete(java.lang.String, int, org.apache.zookeeper.AsyncCallback.VoidCallback, java.lang.Object)
-    *      </a>
-    *
-    *      The version only applies to the node indicated by the path. If force is true all children will be deleted even if the
-    *      version doesn't match.
-    *
-    * @param force Delete all children of this node
-    */
-  def delete(path: String, version: Int = -1, ctx: Option[Any] = None, force: Boolean = false): Future[VoidResponse] = {
+
+  override def delete(path: String, version: Int = -1, ctx: Option[Any] = None, force: Boolean = false): Future[VoidResponse] = {
     if (force) {
       deleteChildren(path, ctx) flatMap {
         _ => delete(path, version, ctx, false)
@@ -343,8 +473,8 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
     }
   }
 
-  /** Delete all the children of a node but not the node. */
-  def deleteChildren(path: String, ctx: Option[Any] = None): Future[VoidResponse] = {
+
+  override def deleteChildren(path: String, ctx: Option[Any] = None): Future[VoidResponse] = {
     def recurse(p: String): Future[VoidResponse] = {
       getChildren(p) flatMap {
         response =>
@@ -365,25 +495,11 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
     recurse(path)
   }
 
-  /** Set a persistent watch on data.
-    * @see watchData
-    */
-  def watchData(path: String)(onData: (String, Option[DataResponse]) => Unit): Future[DataResponse] = watchData(path, true)(onData)
 
-  /** set a persistent watch on a node listening for data changes. If a NodeDataChanged event is received or a
-    * NodeCreated event is received the DataResponse will be returned with the new data and the watch will be
-    * reset. If a None or NodeChildrenChanged the watch will be reset returning nothing. If the node is deleted
-    * receiving a NodeDeleted event None will be returned.
-    *
-    * In the event of an error nothing will be returned but errors will be logged.
-    *
-    * @param path       relative or absolute
-    * @param persistent if this is false the watch will not be reset after receiving an event. ( normal zk behavior )
-    * @param onData     callback executed on data events. None on node deleted event. path will always be absolute regardless
-    *                   of what is passed into the function
-    * @return initial data. If this returns successfully the watch was set otherwise it wasn't
-    */
-  def watchData(path: String, persistent: => Boolean)(onData: (String, Option[DataResponse]) => Unit): Future[DataResponse] = {
+  override def watchData(path: String)(onData: (String, Option[DataResponse]) => Unit): Future[DataResponse] = watchData(path, true)(onData)
+
+
+  override def watchData(path: String, persistent: => Boolean)(onData: (String, Option[DataResponse]) => Unit): Future[DataResponse] = {
     val w = new Watcher {
 
       def ifPersist: Option[Watcher] = {
@@ -417,19 +533,11 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
     get(path, watch = Some(w))
   }
 
-  /** Sets a persistent child watch.
-    * @see watchChildren
-    */
-  def watchChildren(path: String)(onKids: ChildrenResponse => Unit): Future[ChildrenResponse] = watchChildren(path, true)(onKids)
 
-  /** set a persistent watch on if the children of this node change. If they do the updated ChildResponse will be returned.
-    *
-    * @param path
-    * @param persistent
-    * @param onKids
-    * @return
-    */
-  def watchChildren(path: String, persistent: => Boolean)(onKids: ChildrenResponse => Unit): Future[ChildrenResponse] = {
+  override def watchChildren(path: String)(onKids: ChildrenResponse => Unit): Future[ChildrenResponse] = watchChildren(path, true)(onKids)
+
+
+  override def watchChildren(path: String, persistent: => Boolean)(onKids: ChildrenResponse => Unit): Future[ChildrenResponse] = {
     val p = mkPath(path)
     val w = new Watcher {
       def ifPersist: Option[Watcher] = {
@@ -454,11 +562,8 @@ class AsyncZooKeeperClient(val servers: String, val sessionTimeout: Int, val con
     getChildren(p, watch = Some(w))
   }
 
-  /**
-   * sets the client watcher. reconnecting on session expired is handled by the client and doesn't need to be handled
-   * here.
-   */
-  def watchConnection(onState: KeeperState => Unit) = {
+
+  override def watchConnection(onState: KeeperState => Unit) = {
     val w = new Watcher {
       def process(event: WatchedEvent) = onState(event.getState)
     }

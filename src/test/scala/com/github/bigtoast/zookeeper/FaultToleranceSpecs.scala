@@ -34,14 +34,14 @@ class FaultToleranceSpecs extends WordSpec with ShouldMatchers with BeforeAndAft
 
   implicit def toDoAwait[T]( f :Future[T] ) = new DoAwait[T]( f )
 
-  override def beforeAll { sys = ActorSystem("blabs") } 
+  override def beforeAll { sys = ActorSystem("blabs") }
 
   before {
   	prox = RokProx.proxy("zk").from("127.0.0.1:2345").to("127.0.0.1:2181").build(sys)
-  	
+
   	Thread.sleep(2000)
 
-    zk = new AsyncZooKeeperClient("127.0.0.1:2345",1000,1000,"/async-client/tests", None, ExecutionContext.fromExecutorService( eService ) )
+    zk = AsyncZooKeeperClient("127.0.0.1:2345",1000,1000,"/async-client/tests", None, ExecutionContext.fromExecutorService( eService ) )
 
   }
 
@@ -67,10 +67,10 @@ class FaultToleranceSpecs extends WordSpec with ShouldMatchers with BeforeAndAft
   		val latch = new CountDownLatch(1)
 
   		zk.watchConnection {
-  			case Disconnected => 
+  			case Disconnected =>
   				println("\n\n Got Disconnected \n\n")
   				latch.countDown
-  			case e => 
+  			case e =>
   			    println("\n\n Got %s \n\n" format e)
   		}
 
@@ -95,7 +95,7 @@ class FaultToleranceSpecs extends WordSpec with ShouldMatchers with BeforeAndAft
   		val expiredLatch = new CountDownLatch(1)
 
   		zk.watchConnection {
-  			case Expired => 
+  			case Expired =>
   				println("\n\n got expired \n\n")
   				expiredLatch.countDown
   			case e =>
