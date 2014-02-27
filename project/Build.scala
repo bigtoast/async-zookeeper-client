@@ -5,12 +5,12 @@ import Process._
 
 object AsyncZkClient extends Build {
 
-  val VERSION = "0.2.3"
+  val VERSION = "0.3.0"
 
   val dependencies =
-    "com.typesafe.akka"    %  "akka-actor" % "2.0.4" ::
-    "org.apache.zookeeper" %  "zookeeper"  % "3.4.3" ::
-    "org.scalatest"        %% "scalatest"  % "1.8" % "test" :: 
+    "com.typesafe.akka"    %  "akka-actor" % "2.0.5" ::
+    "org.apache.zookeeper" %  "zookeeper"  % "3.4.5" ::
+    "org.scalatest"        %% "scalatest"  % "1.9.1" % "test" :: 
     "com.github.bigtoast"  %% "rokprox"    % "0.2.0" % "test" :: Nil
 
   val publishDocs = TaskKey[Unit]("publish-docs")
@@ -38,6 +38,8 @@ object AsyncZkClient extends Build {
         IO.createDirectory( newDir )
         IO.copyDirectory( dir, newDir )
       },
+
+      resolvers += "Typesafe Releases" at "https://repo.typesafe.com/typesafe/releases/",
 
       libraryDependencies ++= dependencies
 
