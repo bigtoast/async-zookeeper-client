@@ -19,9 +19,9 @@ I didn't implement any ACL stuff because I never use that shiz.
 
 Api Docs [http://bigtoast.github.com/docs/async-zk-client/0.2.1/](http://bigtoast.github.com/docs/async-zk-client/0.2.1/)
 
-Currently depends on 
- * ZK 3.4.3
- * akka-actor 2.0.4
+Currently depends on
+ * ZK 3.4.5
+ * akka-actor 2.0.5
  * Scala 2.9.2
 
 Getting Started
@@ -32,7 +32,7 @@ build.sbt
 
 resolvers += "Bigtoast Repo" at "http://bigtoast.github.com/repo"
 
-libraryDependencies += "com.github.bigtoast" %% "async-zk-api" % "0.2.3"
+libraryDependencies += "com.github.bigtoast" %% "async-zk-api" % "0.3.0"
 
 ```
 
@@ -50,7 +50,7 @@ import org.apache.zookeeper.Watcher.Event.KeeperState
 /* This constructor will block until a connection is made successfully and the
  * client receives a SyncConnected event
  */
-val zk = new AsyncZooKeeperClient(
+val zk = AsyncZooKeeperClient(
 
     servers = "127.0.0.1:2181,127.0.0.1:2182",
 
@@ -180,14 +180,14 @@ zk.handle // returns Option[ZooKeeper]
 
 The AsyncZooKeeperClient object contains some optional implicits to help out.
 
-There is a Derserializer type class to assist in deserialization. Just provide an implicit function of Array[Byte] => T. 
+There is a Derserializer type class to assist in deserialization. Just provide an implicit function of Array[Byte] => T.
 One is already included for Array[Byte] => String.
 
 ```scala
 import AsyncZooKeeperClient._
 import java.io._
 
-// simple java deserializer 
+// simple java deserializer
 def fromBytes[T]( bytes :Array[Byte]) :T = {
     var ary :Array[Byte] = null
     var is :ObjectInputStream = null
@@ -204,7 +204,7 @@ def fromBytes[T]( bytes :Array[Byte]) :T = {
   }
 }
 
-// my data 
+// my data
 case class Node( host :String, port :Int )
 
 implicit def nodeDeser = fromBytes[Node] _
