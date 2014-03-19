@@ -19,7 +19,7 @@ class AsyncZooKeeperClientSpecs extends WordSpec with ShouldMatchers with Before
 
   val eService = Executors.newCachedThreadPool
   implicit val to = 3 second
-  var zk :AsyncZooKeeperClient = _
+  var zk :AsyncZooKeeperClientImpl = _
 
   class DoAwait[T]( f :Future[T] ) {
     def await( implicit d: Duration ) :T = Await.result[T]( f, d )
@@ -28,7 +28,7 @@ class AsyncZooKeeperClientSpecs extends WordSpec with ShouldMatchers with Before
   implicit def toDoAwait[T]( f :Future[T] ) = new DoAwait[T]( f )
 
   before {
-    zk = new AsyncZooKeeperClient("localhost:2181",1000,1000,"/async-client/tests", None, ExecutionContext.fromExecutorService( eService ) )
+    zk = new AsyncZooKeeperClientImpl("localhost:2181",1000,1000,"/async-client/tests", None, ExecutionContext.fromExecutorService( eService ) )
   }
 
   after {
