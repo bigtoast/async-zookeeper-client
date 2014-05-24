@@ -8,8 +8,8 @@ object AsyncZkClient extends Build {
   val VERSION = "0.2.3"
 
   val dependencies =
-    "com.typesafe.akka"    %  "akka-actor" % "2.0.4" ::
     "org.apache.zookeeper" %  "zookeeper"  % "3.4.3" ::
+    "com.typesafe.akka"    %  "akka-actor" % "2.0.4" % "test" ::
     "org.scalatest"        %% "scalatest"  % "1.8" % "test" :: 
     "com.github.bigtoast"  %% "rokprox"    % "0.2.0" % "test" :: Nil
 
